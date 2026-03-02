@@ -11,57 +11,13 @@ This project focuses on building an **AI-driven analytics system** for electric 
 
 ```mermaid
 flowchart TD
-    subgraph RAW["Raw Data — UrbanEV Dataset (Shenzhen, Sep 2022 – Feb 2023)"]
-        A1[occupancy.csv]
-        A2[volume.csv]
-        A3[duration.csv]
-        A4[e_price.csv & s_price.csv]
-        A5[zone-information.csv\nstation_information.csv]
-    end
-
-    subgraph PROC["Data Processing Pipeline"]
-        B1["NB 01 — Data Inspection\nEDA, distributions, trends"]
-        B2["NB 02 — Reshape & Merge\nWide → Long, join zone & station metadata"]
-        B3["NB 03 — Feature Engineering\n32 features: temporal, cyclical, lag, rolling, spatial, price"]
-    end
-
-    subgraph TRAIN["Model Training Pipeline"]
-        C1["NB 04 — Hyperparameter Tuning\nGridSearchCV + TimeSeriesSplit"]
-        C2["NB 05 — Model Training\nTime-based split: Sep–Jan train / Feb test"]
-        C3{{"Dual Target\nOccupancy & Volume"}}
-    end
-
-    subgraph MODELS["Trained Models — 6 pkl files"]
-        D1[Random Forest]
-        D2[XGBoost]
-        D3[LightGBM]
-    end
-
-    subgraph EVAL["Evaluation & Results"]
-        E1["NB 06 — Visualization\n19 charts: comparison, residuals, feature importance"]
-        E2["results/\nmetrics.csv · predictions.csv\nfeature_importance/ · charts/"]
-    end
-
-    subgraph DASH["Synora Dashboard — streamlit_app.py"]
-        F1[Overview]
-        F2[Model Comparison]
-        F3[Predictions Explorer]
-        F4[Feature Importance]
-        F5[Zone Analysis\nInteractive Map]
-        F6[About]
-    end
-
-    RAW --> B1
-    B1 --> B2
-    B2 --> B3
-    B3 --> C1
-    C1 --> C2
-    C2 --> C3
-    C3 --> D1 & D2 & D3
-    D1 & D2 & D3 --> E1
-    D1 & D2 & D3 --> E2
-    E2 --> DASH
-    E1 --> E2
+    A[Raw Data: UrbanEV CSVs] --> B[Data Inspection & EDA]
+    B --> C[Reshape & Merge Wide to Long]
+    C --> D[Feature Engineering 32 Features]
+    D --> E[Hyperparameter Tuning]
+    E --> F[Model Training: RF, XGB, LGBM]
+    F --> G[Evaluation MAE, RMSE, R²]
+    G --> H[Synora Dashboard Streamlit]
 ```
 
 ---
@@ -69,11 +25,9 @@ flowchart TD
 ### Technology Stack
 | Component | Technology |
 | :--- | :--- |
-| **ML Models (M1)** | Random Forest, XGBoost, LightGBM, Scikit-Learn |
-| **Agent Framework (M2)** | LangGraph, Chroma/FAISS (RAG) |
+| **ML Models** | Random Forest, XGBoost, LightGBM, Scikit-Learn |
 | **UI Framework** | Streamlit |
 | **Visualization** | Plotly, Matplotlib, Seaborn |
-| **LLMs (M2)** | Open-source models or Free-tier APIs |
 
 ---
 
