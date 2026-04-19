@@ -14,6 +14,12 @@ from plotly.subplots import make_subplots
 from pathlib import Path
 import joblib
 from synora_agent.phase0_contracts import apply_phase0_defaults, run_phase0_preflight
+from synora_agent.phase1_state import apply_phase1_defaults, run_phase1_validation
+from synora_agent.phase2_foundation import apply_phase2_defaults, run_phase2_validation
+from synora_agent.phase3_reasoning import apply_phase3_defaults, run_phase3_pipeline
+from synora_agent.phase4_ranking import apply_phase4_defaults, run_phase4_pipeline
+from synora_agent.phase5_validation import apply_phase5_defaults, run_phase5_validation
+from synora_agent.phase6_operations import apply_phase6_defaults, run_phase6_operations
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -58,10 +64,32 @@ MODEL_FILE_KEYS = {"RandomForest": "randomforest", "XGBoost": "xgboost", "LightG
 
 
 def init_phase0_state() -> None:
-    """Initialize and validate Phase 0 contracts in session state."""
+    """Initialize and validate Phase 0-6 contracts in session state."""
     current = st.session_state.get("agent_state", {})
-    st.session_state["agent_state"] = apply_phase0_defaults(current)
-    st.session_state["phase0_preflight"] = run_phase0_preflight(st.session_state["agent_state"])
+    state = apply_phase0_defaults(current)
+    state = apply_phase1_defaults(state)
+    state = apply_phase2_defaults(state)
+    state = apply_phase3_defaults(state)
+    state = apply_phase4_defaults(state)
+    state = apply_phase5_defaults(state)
+    state = apply_phase6_defaults(state)
+
+    phase0_result = run_phase0_preflight(state)
+    phase1_result = run_phase1_validation(state)
+    phase2_result = run_phase2_validation(state, Path("."))
+    phase3_state, phase3_result = run_phase3_pipeline(state, Path("."))
+    phase4_state, phase4_result = run_phase4_pipeline(phase3_state)
+    phase5_state, phase5_result = run_phase5_validation(phase4_state, Path("."))
+    phase6_state, phase6_result = run_phase6_operations(phase5_state)
+
+    st.session_state["agent_state"] = phase6_state
+    st.session_state["phase0_preflight"] = phase0_result
+    st.session_state["phase1_validation"] = phase1_result
+    st.session_state["phase2_validation"] = phase2_result
+    st.session_state["phase3_validation"] = phase3_result
+    st.session_state["phase4_validation"] = phase4_result
+    st.session_state["phase5_validation"] = phase5_result
+    st.session_state["phase6_validation"] = phase6_result
 
 
 init_phase0_state()
@@ -103,13 +131,13 @@ section[data-testid="stSidebar"] {
     background: linear-gradient(165deg, #0a0a1a 0%, #0f0f28 35%, #161035 70%, #1a1040 100%);
     border-right: 1px solid rgba(108,99,255,0.12);
     overflow-x: hidden !important;
-    overflow-y: hidden !important;
+    overflow-y: auto !important;
     max-height: 100vh;
     box-shadow: 4px 0 30px rgba(0,0,0,0.3);
 }
 section[data-testid="stSidebar"] > div:first-child {
     overflow-x: hidden !important;
-    overflow-y: hidden !important;
+    overflow-y: auto !important;
     display: flex; flex-direction: column; min-height: 100vh;
 }
 section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
@@ -464,6 +492,119 @@ with st.sidebar:
             for warn in phase0_result.warnings:
                 st.caption(f"- Warning: {warn}")
 
+    phase1_result = st.session_state.get("phase1_validation")
+    if phase1_result is not None:
+        st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+        if phase1_result.passed:
+            st.success(f"Phase 1 validation: PASS ({phase1_result.completeness:.0%} complete)")
+            for warn in phase1_result.warnings:
+                st.caption(f"- Warning: {warn}")
+        else:
+            st.error(f"Phase 1 validation: FAIL ({phase1_result.completeness:.0%} complete)")
+            for err in phase1_result.errors:
+                st.caption(f"- {err}")
+            for warn in phase1_result.warnings:
+                st.caption(f"- Warning: {warn}")
+
+    phase2_result = st.session_state.get("phase2_validation")
+    if phase2_result is not None:
+        st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+        if phase2_result.passed:
+            retrieval_flag = "OK" if phase2_result.retrieval_precision_ok else "LOW"
+            st.success(f"Phase 2 validation: PASS (retrieval: {retrieval_flag})")
+            for warn in phase2_result.warnings:
+                st.caption(f"- Warning: {warn}")
+        else:
+            st.error("Phase 2 validation: FAIL")
+            for err in phase2_result.errors:
+                st.caption(f"- {err}")
+            for warn in phase2_result.warnings:
+                st.caption(f"- Warning: {warn}")
+
+    phase3_result = st.session_state.get("phase3_validation")
+    if phase3_result is not None:
+        st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+        if phase3_result.passed:
+            st.success(
+                f"Phase 3 validation: PASS ({len(phase3_result.node_sequence)} nodes, "
+                f"{phase3_result.recommendation_count} recs)"
+            )
+            if not phase3_result.output_contract_ok:
+                st.caption("- Warning: output contract check failed.")
+            if not phase3_result.recommendation_contract_ok:
+                st.caption("- Warning: recommendation contract check failed.")
+            for warn in phase3_result.warnings:
+                st.caption(f"- Warning: {warn}")
+        else:
+            st.error("Phase 3 validation: FAIL")
+            for err in phase3_result.errors:
+                st.caption(f"- {err}")
+            for warn in phase3_result.warnings:
+                st.caption(f"- Warning: {warn}")
+
+    phase4_result = st.session_state.get("phase4_validation")
+    if phase4_result is not None:
+        st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+        if phase4_result.passed:
+            st.success(
+                f"Phase 4 validation: PASS ({phase4_result.ranked_count} ranked, "
+                f"{phase4_result.filtered_out_count} filtered)"
+            )
+            if not phase4_result.ranking_stable:
+                st.caption("- Warning: ranking stability check failed.")
+            if not phase4_result.bounded_runtime_ok:
+                st.caption("- Warning: runtime budget exceeded.")
+            for warn in phase4_result.warnings:
+                st.caption(f"- Warning: {warn}")
+        else:
+            st.error("Phase 4 validation: FAIL")
+            for err in phase4_result.errors:
+                st.caption(f"- {err}")
+            for warn in phase4_result.warnings:
+                st.caption(f"- Warning: {warn}")
+
+    phase5_result = st.session_state.get("phase5_validation")
+    if phase5_result is not None:
+        st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+        passed_gate_count = sum(1 for ok in phase5_result.gates.values() if ok)
+        total_gate_count = len(phase5_result.gates)
+
+        if phase5_result.passed and phase5_result.quality_gate_passed:
+            st.success(
+                f"Phase 5 validation: PASS ({passed_gate_count}/{total_gate_count} gates, quality gate passed)"
+            )
+        else:
+            st.error(
+                f"Phase 5 validation: FAIL ({passed_gate_count}/{total_gate_count} gates, quality gate failed)"
+            )
+
+        failed_scenarios = [name for name, ok in phase5_result.scenario_results.items() if not ok]
+        if failed_scenarios:
+            st.caption(f"- Failed scenarios: {', '.join(failed_scenarios)}")
+
+        for err in phase5_result.errors:
+            st.caption(f"- {err}")
+        for warn in phase5_result.warnings:
+            st.caption(f"- Warning: {warn}")
+
+    phase6_result = st.session_state.get("phase6_validation")
+    if phase6_result is not None:
+        st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+        if phase6_result.passed and phase6_result.handoff_ready:
+            st.success("Phase 6 validation: PASS (handoff ready)")
+        else:
+            st.error("Phase 6 validation: FAIL (handoff not ready)")
+
+        st.caption(f"- Docs complete: {phase6_result.docs_complete}")
+        st.caption(f"- Runbook complete: {phase6_result.runbook_complete}")
+        st.caption(f"- Governance configured: {phase6_result.governance_configured}")
+        st.caption(f"- KPI schema ready: {phase6_result.kpi_schema_ready}")
+
+        for err in phase6_result.errors:
+            st.caption(f"- {err}")
+        for warn in phase6_result.warnings:
+            st.caption(f"- Warning: {warn}")
+
     # ── Spacer + footer ──
     st.markdown("<div style='flex:1;min-height:2rem;'></div>", unsafe_allow_html=True)
     st.markdown("""
@@ -518,7 +659,7 @@ def page_overview():
             ))
         styled_fig(fig, f"R² Score — {target_label}", height=380)
         fig.update_yaxes(range=[0, 1.1], title_text="R²")
-        st.plotly_chart(fig, key="ov_r2", use_container_width=True)
+        st.plotly_chart(fig, key="ov_r2", width="stretch")
 
     with col_r:
         fig = go.Figure()
@@ -532,7 +673,7 @@ def page_overview():
             ))
         styled_fig(fig, f"Mean Absolute Error — {target_label}", height=380)
         fig.update_yaxes(title_text="MAE")
-        st.plotly_chart(fig, key="ov_mae", use_container_width=True)
+        st.plotly_chart(fig, key="ov_mae", width="stretch")
 
     # ── Metrics table ──
     st.markdown(f"#### {target_label} Model Metrics")
@@ -542,7 +683,7 @@ def page_overview():
                  "MAPE (%)": "{:.2f}"})
         .background_gradient(subset=["R²"], cmap="Purples")
         .background_gradient(subset=["MAE"], cmap="Reds_r"),
-        use_container_width=True, hide_index=True,
+        width="stretch", hide_index=True,
     )
 
     st.divider()
@@ -564,7 +705,7 @@ def page_overview():
     styled_fig(fig, f"Average Hourly {target_label} (All Zones)", height=370)
     fig.update_xaxes(title_text="Hour of Day", dtick=2)
     fig.update_yaxes(title_text=target_label)
-    st.plotly_chart(fig, key="ov_hourly", use_container_width=True)
+    st.plotly_chart(fig, key="ov_hourly", width="stretch")
 
     # ── All models hourly overlay ──
     st.markdown(f"#### Model Predictions vs Actual (Hourly Mean)")
@@ -592,7 +733,7 @@ def page_overview():
     styled_fig(fig, f"All Models vs Actual — Hourly {target_label}", height=400)
     fig.update_xaxes(title_text="Hour of Day", dtick=2)
     fig.update_yaxes(title_text=target_label)
-    st.plotly_chart(fig, key="ov_models", use_container_width=True)
+    st.plotly_chart(fig, key="ov_models", width="stretch")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -649,7 +790,7 @@ def page_model_comparison():
                     showlegend=False,
                 ))
             styled_fig(fig, metric_name, height=320)
-            st.plotly_chart(fig, key=f"mc_{metric_name}", use_container_width=True)
+            st.plotly_chart(fig, key=f"mc_{metric_name}", width="stretch")
 
     st.divider()
 
@@ -670,7 +811,7 @@ def page_model_comparison():
         radialaxis=dict(gridcolor="rgba(255,255,255,0.06)", showticklabels=False),
         angularaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
     ))
-    st.plotly_chart(fig, key="mc_radar", use_container_width=True)
+    st.plotly_chart(fig, key="mc_radar", width="stretch")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -747,7 +888,7 @@ def page_predictions():
         styled_fig(fig, f"Actual vs {model} — {target_label}{ts_note}", height=440)
         fig.update_xaxes(title_text="Time")
         fig.update_yaxes(title_text=target_label)
-        st.plotly_chart(fig, key="pe_ts", use_container_width=True)
+        st.plotly_chart(fig, key="pe_ts", width="stretch")
 
         # Hourly error bars
         if sel_zone == "All Zones":
@@ -766,7 +907,7 @@ def page_predictions():
             styled_fig(fig, f"MAE by Hour — {model}", height=300)
             fig.update_xaxes(title_text="Hour", dtick=2)
             fig.update_yaxes(title_text="MAE")
-            st.plotly_chart(fig, key="pe_hourly_err", use_container_width=True)
+            st.plotly_chart(fig, key="pe_hourly_err", width="stretch")
 
     with t2:
         ssc = df if len(df) <= 10000 else df.sample(10000, random_state=42)
@@ -786,7 +927,7 @@ def page_predictions():
         styled_fig(fig, f"Actual vs Predicted — {model}", height=480)
         fig.update_xaxes(title_text=f"Actual {target_label}")
         fig.update_yaxes(title_text=f"Predicted {target_label}")
-        st.plotly_chart(fig, key="pe_sc", use_container_width=True)
+        st.plotly_chart(fig, key="pe_sc", width="stretch")
 
     with t3:
         ca, cb = st.columns(2)
@@ -799,7 +940,7 @@ def page_predictions():
             styled_fig(fig, "Prediction Error Distribution", height=380)
             fig.update_xaxes(title_text="Error (Actual − Predicted)")
             fig.update_yaxes(title_text="Frequency")
-            st.plotly_chart(fig, key="pe_hist", use_container_width=True)
+            st.plotly_chart(fig, key="pe_hist", width="stretch")
 
         with cb:
             # Convert hex color to rgba for Violin fillcolor
@@ -811,7 +952,7 @@ def page_predictions():
             ))
             styled_fig(fig, "Absolute Error Distribution", height=380)
             fig.update_yaxes(title_text="|Error|")
-            st.plotly_chart(fig, key="pe_violin", use_container_width=True)
+            st.plotly_chart(fig, key="pe_violin", width="stretch")
 
         # Residual plot
         st.markdown("##### Residual Plot")
@@ -825,13 +966,13 @@ def page_predictions():
         styled_fig(fig, f"Residuals vs Predicted — {model}", height=360)
         fig.update_xaxes(title_text=f"Predicted {target_label}")
         fig.update_yaxes(title_text="Residual")
-        st.plotly_chart(fig, key="pe_resid", use_container_width=True)
+        st.plotly_chart(fig, key="pe_resid", width="stretch")
 
     with t4:
         show = df[["time", "zone_id", actual_col, pred_col]].copy()
         show["error"] = show[actual_col] - show[pred_col]
         show.columns = ["Time", "Zone", "Actual", "Predicted", "Error"]
-        st.dataframe(show.head(500), use_container_width=True, hide_index=True)
+        st.dataframe(show.head(500), width="stretch", hide_index=True)
         st.caption(f"Showing 500 of {len(show):,} rows")
 
 
@@ -879,7 +1020,7 @@ def page_feature_importance():
     ))
     styled_fig(fig, f"Top {top_n} Features — {mn}", height=max(400, top_n * 30))
     fig.update_xaxes(title_text="Importance Score")
-    st.plotly_chart(fig, key="fi_bar", use_container_width=True)
+    st.plotly_chart(fig, key="fi_bar", width="stretch")
 
     st.divider()
 
@@ -912,7 +1053,7 @@ def page_feature_importance():
     fig.update_layout(barmode="group")
     fig.update_xaxes(tickangle=-30, title_text="Feature")
     fig.update_yaxes(title_text="Relative Importance (%)")
-    st.plotly_chart(fig, key="fi_cross", use_container_width=True)
+    st.plotly_chart(fig, key="fi_cross", width="stretch")
 
     # ── Full table ──
     with st.expander(f"Full {mn} Feature Importance Table"):
@@ -920,7 +1061,7 @@ def page_feature_importance():
         st.dataframe(
             full.style.format({"importance": "{:,.0f}"})
                 .bar(subset=["importance"], color=clr + "33"),
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
         )
 
 
@@ -984,7 +1125,7 @@ def page_zone_analysis():
                         bgcolor="rgba(0,0,0,0)",
                     ),
                 )
-                st.plotly_chart(fig, key="za_map", use_container_width=True)
+                st.plotly_chart(fig, key="za_map", width="stretch")
         else:
             st.info("Location data unavailable.")
 
@@ -997,7 +1138,7 @@ def page_zone_analysis():
             ))
             styled_fig(fig, "MAE Distribution Across Zones", height=380)
             fig.update_xaxes(title_text="Zone MAE")
-            st.plotly_chart(fig, key="za_hist1", use_container_width=True)
+            st.plotly_chart(fig, key="za_hist1", width="stretch")
 
         with cb:
             fig = go.Figure(go.Histogram(
@@ -1006,7 +1147,7 @@ def page_zone_analysis():
             ))
             styled_fig(fig, f"Mean {target_label} by Zone", height=380)
             fig.update_xaxes(title_text=f"Mean {target_label}")
-            st.plotly_chart(fig, key="za_hist2", use_container_width=True)
+            st.plotly_chart(fig, key="za_hist2", width="stretch")
 
         # Demand vs Error scatter
         fig = go.Figure(go.Scatter(
@@ -1019,7 +1160,7 @@ def page_zone_analysis():
         styled_fig(fig, f"Demand vs Error — {model}", height=400)
         fig.update_xaxes(title_text=f"Mean {target_label}")
         fig.update_yaxes(title_text="MAE")
-        st.plotly_chart(fig, key="za_scatter", use_container_width=True)
+        st.plotly_chart(fig, key="za_scatter", width="stretch")
 
     with t_rank:
         cb_col, cw_col = st.columns(2)
@@ -1028,13 +1169,13 @@ def page_zone_analysis():
             b = zs.nsmallest(10, "mae")[["zone_id", "mae", "mean_actual", "samples"]]
             b.columns = ["Zone", "MAE", f"Mean {target_label}", "Samples"]
             st.dataframe(b.style.format({"MAE": "{:.4f}", f"Mean {target_label}": "{:.2f}"}),
-                         use_container_width=True, hide_index=True)
+                         width="stretch", hide_index=True)
         with cw_col:
             st.markdown("#### Worst Zones")
             w = zs.nlargest(10, "mae")[["zone_id", "mae", "mean_actual", "samples"]]
             w.columns = ["Zone", "MAE", f"Mean {target_label}", "Samples"]
             st.dataframe(w.style.format({"MAE": "{:.4f}", f"Mean {target_label}": "{:.2f}"}),
-                         use_container_width=True, hide_index=True)
+                         width="stretch", hide_index=True)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
