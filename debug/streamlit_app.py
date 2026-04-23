@@ -9,31 +9,26 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
-import io
-import contextlib
 import importlib
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
 import joblib
-from synora_agent.phase0_contracts import apply_phase0_defaults, run_phase0_preflight
-from synora_agent.phase1_state import apply_phase1_defaults, run_phase1_validation
-from synora_agent.phase2_foundation import (
+from debug.synora_agent.phase0_contracts import apply_phase0_defaults, run_phase0_preflight
+from debug.synora_agent.phase1_state import apply_phase1_defaults, run_phase1_validation
+from debug.synora_agent.phase2_foundation import (
     apply_phase2_defaults,
     build_guideline_corpus,
     retrieve_guidelines,
     run_phase2_validation,
 )
-from synora_agent.phase3_reasoning import apply_phase3_defaults, run_phase3_pipeline
-from synora_agent.phase4_ranking import apply_phase4_defaults, run_phase4_pipeline
-from synora_agent.phase5_validation import apply_phase5_defaults, run_phase5_validation
-from synora_agent.phase6_operations import apply_phase6_defaults, run_phase6_operations
+from debug.synora_agent.phase3_reasoning import apply_phase3_defaults, run_phase3_pipeline
+from debug.synora_agent.phase4_ranking import apply_phase4_defaults, run_phase4_pipeline
+from debug.synora_agent.phase5_validation import apply_phase5_defaults, run_phase5_validation
+from debug.synora_agent.phase6_operations import apply_phase6_defaults, run_phase6_operations
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
-
-# Reduce xgboost native logging noise when loading legacy pickled models.
-os.environ.setdefault("XGBOOST_VERBOSITY", "0")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIG
@@ -143,13 +138,13 @@ section[data-testid="stSidebar"] {
     background: linear-gradient(165deg, #0a0a1a 0%, #0f0f28 35%, #161035 70%, #1a1040 100%);
     border-right: 1px solid rgba(108,99,255,0.12);
     overflow-x: hidden !important;
-    overflow-y: auto !important;
+    overflow-y: hidden !important;
     max-height: 100vh;
     box-shadow: 4px 0 30px rgba(0,0,0,0.3);
 }
 section[data-testid="stSidebar"] > div:first-child {
     overflow-x: hidden !important;
-    overflow-y: auto !important;
+    overflow-y: hidden !important;
     display: flex; flex-direction: column; min-height: 100vh;
 }
 section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
@@ -277,14 +272,8 @@ def load_models():
         models[mn] = {}
         for tgt in ["occupancy", "volume"]:
             p = PATHS["models_dir"] / f"{fk}_{tgt}.pkl"
-            if p.exists() and p.stat().st_size > 500:
-                try:
-                    with contextlib.redirect_stderr(io.StringIO()):
-                        models[mn][tgt] = joblib.load(p)
-                except Exception:
-                    models[mn][tgt] = None
-            else:
-                models[mn][tgt] = None
+            if p.exists():
+                models[mn][tgt] = joblib.load(p)
     return models
 
 
@@ -303,30 +292,14 @@ def load_predictions():
     """Generate predictions from pkl models on the test set."""
     test = load_test_data()
     models = load_models()
+    X_test = test[FEATURE_COLS]
 
     for mn in MODEL_COLORS:
         for tgt in ["occupancy", "volume"]:
             model = models.get(mn, {}).get(tgt)
             pred_col = PRED_COLS[mn][tgt]
             if model is not None:
-                if hasattr(model, "feature_names_in_"):
-                    model_features = [str(c) for c in model.feature_names_in_]
-                elif hasattr(model, "feature_name_"):
-                    model_features = [str(c) for c in model.feature_name_]
-                else:
-                    model_features = FEATURE_COLS
-
-                missing = [c for c in model_features if c not in test.columns]
-                if missing:
-                    test[pred_col] = np.nan
-                    continue
-
-                X_model = test[model_features]
-                valid_mask = X_model.notna().all(axis=1)
-                pred_series = pd.Series(np.nan, index=test.index)
-                if valid_mask.any():
-                    pred_series.loc[valid_mask] = model.predict(X_model.loc[valid_mask])
-                test[pred_col] = pred_series
+                test[pred_col] = model.predict(X_test)
             else:
                 test[pred_col] = np.nan
 
@@ -361,18 +334,7 @@ def load_fi():
 
 @st.cache_data(show_spinner=False)
 def load_zones():
-    p = PATHS["zones"]
-    if p.exists() and p.stat().st_size > 500:
-        return pd.read_csv(p)
-    else:
-        # Graceful fallback: derive zone metadata from processed dataset if LFS stub
-        try:
-            from agent.rag_engine import _load_zone_profiles
-            zp = _load_zone_profiles()
-            # Streamlit app expects 'TAZID' instead of 'zone_id' from the raw file
-            return zp.rename(columns={"zone_id": "TAZID"})
-        except Exception:
-            return pd.DataFrame({"TAZID": []})
+    return pd.read_csv(PATHS["zones"])
 
 
 @st.cache_data(show_spinner=False)
@@ -718,7 +680,6 @@ with st.sidebar:
         key="global_target",
     )
     target_label = "Occupancy" if target == "occupancy" else "Volume"
-    target_badge = "Occupancy" if target == "occupancy" else "Volume"
 
     st.markdown("</div>", unsafe_allow_html=True)   # close glass card
 
@@ -730,22 +691,14 @@ with st.sidebar:
                     letter-spacing:0.1em; opacity:0.35; margin-bottom:0.35rem; text-align:center;">Navigation</div>
     """, unsafe_allow_html=True)
 
-    NAV_PAGES = [
-        "Agentic Planner",
-        "Overview",
-        "Model Comparison",
-        "Predictions Explorer",
-        "Feature Importance",
-        "Zone Analysis",
-        "About",
-    ]
+    NAV_PAGES = ["Overview", "Model Comparison", "Predictions Explorer",
+                 "Feature Importance", "Zone Analysis", "AI Assistant", "Debug Menu", "About"]
     page = st.radio(
         "Nav",
         NAV_PAGES,
-        index=1,
         format_func=lambda p: p,
         label_visibility="collapsed",
-        key="sidebar_nav",
+        key="page_nav",
     )
 
     st.markdown("</div>", unsafe_allow_html=True)   # close glass card
@@ -757,7 +710,7 @@ with st.sidebar:
         <span style="background:{badge_color}18; color:{badge_color}; border:1px solid {badge_color}40;
                      padding:0.35rem 1.1rem; border-radius:20px; font-size:0.78rem; font-weight:700;
                      backdrop-filter:blur(8px);">
-            {target_badge} Mode
+            {target_label} Mode
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -1420,7 +1373,6 @@ Predictions are made at **hourly granularity** across **275 traffic analysis zon
 - 3-model comparison
 - Interactive spatial maps
 - Feature importance analysis
-- **Agentic Planner:** LangGraph workflow, ChromaDB RAG, structured demand / high-load / scheduling JSON
 
 </div>
         """, unsafe_allow_html=True)
@@ -1434,568 +1386,186 @@ Predictions are made at **hourly granularity** across **275 traffic analysis zon
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PAGE: Agentic Planner
+# PAGE: AI Assistant
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def page_agentic_planner():
-    """Agentic Planner page — LangGraph + RAG infrastructure planning assistant."""
-    import json
-    import threading
-    import time as _time
-    import os
+def page_ai_assistant():
+    section_header("AI Assistant", "Groq-powered assistant with local pipeline fallback")
 
-    # ── Additional CSS for agent page ──
-    st.markdown("""
-    <style>
-    .agent-step {
-        display:flex; align-items:flex-start; gap:0.75rem;
-        padding:0.65rem 1rem;
-        border-radius:12px;
-        border:1px solid rgba(255,255,255,0.06);
-        margin-bottom:0.5rem;
-        background:rgba(255,255,255,0.02);
-        animation: fadeIn 0.4s ease;
-    }
-    .agent-step.running {
-        border-color:rgba(108,99,255,0.35);
-        background:rgba(108,99,255,0.06);
-    }
-    .agent-step.done {
-        border-color:rgba(0,201,167,0.25);
-        background:rgba(0,201,167,0.04);
-    }
-    .agent-step.error {
-        border-color:rgba(255,107,107,0.35);
-        background:rgba(255,107,107,0.06);
-    }
-    @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
-    .anomaly-badge {
-        display:inline-block;
-        padding:0.2rem 0.7rem;
-        border-radius:20px;
-        font-size:0.75rem;
-        font-weight:700;
-        margin-right:0.3rem;
-    }
-    .badge-critical { background:rgba(255,107,107,0.2); color:#FF6B6B; border:1px solid rgba(255,107,107,0.4); }
-    .badge-high     { background:rgba(255,193,7,0.18);  color:#FFC107; border:1px solid rgba(255,193,7,0.35); }
-    .badge-medium   { background:rgba(108,99,255,0.18); color:#8C85FF; border:1px solid rgba(108,99,255,0.35); }
-    .rec-box {
-        background:linear-gradient(135deg,rgba(108,99,255,0.08),rgba(0,201,167,0.05));
-        border:1px solid rgba(108,99,255,0.2);
-        border-radius:16px;
-        padding:1.5rem 2rem;
-        margin-top:1rem;
-    }
-    .review-gate {
-        background:linear-gradient(135deg,rgba(255,193,7,0.1),rgba(255,107,107,0.07));
-        border:2px solid rgba(255,193,7,0.4);
-        border-radius:16px;
-        padding:1.5rem;
-        margin:1rem 0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    if "assistant_provider_mode" not in st.session_state:
+        st.session_state["assistant_provider_mode"] = "Auto"
+    if "assistant_model_select" not in st.session_state:
+        st.session_state["assistant_model_select"] = "llama-3.3-70B-versatile"
+    if "assistant_model_custom" not in st.session_state:
+        st.session_state["assistant_model_custom"] = ""
 
-    section_header(
-        "Agentic Planner",
-        "LangGraph · ChromaDB RAG · Groq Llama 3.3 — AI-powered EV infrastructure planning",
-    )
-
-    # ── Secrets-only API config ──
-    # API keys/provider are sourced from .streamlit/secrets.toml and mirrored
-    # into process environment because agent modules read os.environ.
-    try:
-        secrets = st.secrets
-    except Exception:
-        secrets = {}
-
-    provider = str(secrets.get("MODEL_PROVIDER") or "groq").strip().lower()
-    if provider not in {"groq", "anthropic", "openai"}:
-        provider = "groq"
-
-    os.environ["MODEL_PROVIDER"] = provider
-
-    rag_backend = str(secrets.get("SYNORA_RAG_BACKEND") or "lightweight").strip().lower()
-    if rag_backend not in {"lightweight", "chroma"}:
-        rag_backend = "lightweight"
-    os.environ["SYNORA_RAG_BACKEND"] = rag_backend
-
-    for key_name in ["GROQ_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]:
-        secret_val = secrets.get(key_name)
-        if secret_val:
-            os.environ[key_name] = str(secret_val)
-        else:
-            os.environ.pop(key_name, None)
-
-    provider_key_map = {
-        "groq": "GROQ_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai": "OPENAI_API_KEY",
-    }
-    active_key_name = provider_key_map[provider]
-    if not os.getenv(active_key_name):
-        st.warning(
-            f"Missing {active_key_name} for MODEL_PROVIDER={provider}. "
-            "Add it to .streamlit/secrets.toml."
-        )
-    else:
-        st.caption(f"LLM provider configured from secrets: {provider}")
-    st.caption(f"RAG backend: {rag_backend}")
-
-    # ── Initialise session state ──
-    for k, v in [
-        ("ap_result", None),
-        ("ap_running", False),
-        ("ap_trace", []),
-        ("ap_approved", False),
-        ("ap_query", ""),
-        ("_ap_load_example", None),
-    ]:
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-    # ── Flush pending example query BEFORE the text_input renders ──
-    # (Streamlit forbids writing to a widget key after it's instantiated)
-    if st.session_state["_ap_load_example"] is not None:
-        st.session_state["ap_query_input"] = st.session_state["_ap_load_example"]
-        st.session_state["_ap_load_example"] = None
-
-    # ── Query input ──
-    col_i, col_b = st.columns([5, 1])
-    with col_i:
-        query = st.text_input(
-            "Describe your planning query",
-            placeholder="e.g. Plan infrastructure for high-demand zones next weekend",
-            key="ap_query_input",
-            label_visibility="collapsed",
-        )
-    with col_b:
-        run_btn = st.button(
-            "Run Agent",
-            type="primary",
-            disabled=st.session_state.ap_running,
-            width="stretch",
-            key="ap_run_btn",
-        )
-
-    # ── Example queries ──
-    examples = [
-        "Plan infrastructure for high-demand zones next weekend",
-        "Which zones in Shenzhen need additional charging stations next month?",
-        "Identify zones at risk of congestion tomorrow and recommend interventions",
-        "Optimise EV charging capacity for zones 106 and 107",
+    model_options = [
+        "llama-3.3-70B-versatile",
+        "llama-3.1-8b-instant",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "custom",
     ]
+
+    c_mode, c_model = st.columns([1, 1])
+    with c_mode:
+        provider_mode = st.selectbox(
+            "Provider",
+            ["Auto", "Local Pipeline", "Groq"],
+            key="assistant_provider_mode",
+        )
+
+    with c_model:
+        model_choice = st.selectbox("Groq Model", model_options, key="assistant_model_select")
+
+    selected_model = model_choice
+    if model_choice == "custom":
+        selected_model = st.text_input(
+            "Custom Groq Model",
+            value=st.session_state.get("assistant_model_custom", ""),
+            key="assistant_model_custom",
+            placeholder="e.g. llama-3.1-70b-versatile",
+        ).strip() or os.getenv("GROQ_MODEL", "llama-3.3-70B-versatile")
+
+    provider_hint = provider_mode
     st.markdown(
-        "<div style='font-size:0.78rem;opacity:0.45;margin-bottom:0.3rem;'>Quick examples:</div>",
+        f"""
+<div class="glass-card" style="border:1px solid rgba(108,99,255,0.22);">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+        <div>
+            <div style="font-size:0.78rem;opacity:0.6;text-transform:uppercase;letter-spacing:0.08em;">Assistant Mode</div>
+            <div style="font-size:1.05rem;font-weight:700;">{provider_hint}</div>
+            <div style="font-size:0.78rem;opacity:0.65; margin-top:0.2rem;">Model: {selected_model}</div>
+        </div>
+    </div>
+</div>
+        """,
         unsafe_allow_html=True,
     )
-    ex_cols = st.columns(len(examples))
-    for i, ex in enumerate(examples):
-        with ex_cols[i]:
-            if st.button(
-                ex[:42] + "…" if len(ex) > 42 else ex,
-                key=f"ap_ex_{i}",
-                width="stretch",
-            ):
-                # Store in intermediate key — flushed to ap_query_input
-                # at the TOP of next run, before the widget is created
-                st.session_state["_ap_load_example"] = ex
-                st.session_state["ap_result"] = None
-                st.session_state["ap_trace"] = []
-                st.rerun()
 
-    st.divider()
+    if "assistant_chat" not in st.session_state:
+        st.session_state["assistant_chat"] = [
+            {
+                "role": "assistant",
+                "content": (
+                    "Ask me about charger placement, scheduling optimization, phase gate failures, "
+                    "or top recommendations from the local pipeline."
+                ),
+                "provider": provider_hint,
+            }
+        ]
 
-    # ── Run agent ──
-    effective_query = query or st.session_state.get("ap_query", "")
-    if run_btn and effective_query:
-        st.session_state.ap_running = True
-        st.session_state.ap_result = None
-        st.session_state.ap_trace = []
-        st.session_state.ap_approved = False
-        st.session_state.ap_query = effective_query
-        st.rerun()
+    for msg in st.session_state["assistant_chat"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("provider") and msg["role"] == "assistant":
+                st.caption(f"Provider: {msg['provider']}")
 
-    # ── Actual agent execution (runs on first rerun after button press) ──
-    if st.session_state.ap_running and st.session_state.ap_result is None:
-        trace_container = st.container()
-        trace_placeholder = trace_container.empty()
+    user_prompt = st.chat_input("Ask Synora AI Assistant...")
+    if user_prompt:
+        st.session_state["assistant_chat"].append({"role": "user", "content": user_prompt})
+        with st.chat_message("user"):
+            st.markdown(user_prompt)
 
-        with st.spinner("Running agent analysis..."):
-            try:
-                # Import here to avoid top-level import errors if deps missing
-                from agent.graph import run_agent_streaming
-
-                live_trace: list[str] = []
-                final_state = {}
-
-                NODE_ICONS = {
-                    "demand_forecaster": "[DF]",
-                    "anomaly_detector":  "[AN]",
-                    "rag_retriever":     "[RAG]",
-                    "planning_agent":    "[PLAN]",
-                    "report_generator":  "[RPT]",
-                    "human_review_gate": "[REVIEW]",
-                }
-
-                for node_name, node_output in run_agent_streaming(
-                    st.session_state.ap_query,
-                    approved=st.session_state.ap_approved,
-                ):
-                    final_state.update(node_output)
-                    icon = NODE_ICONS.get(node_name, "[STEP]")
-                    step_msg = f"{icon} <b>{node_name.replace('_', ' ').title()}</b> — completed"
-                    live_trace.append(step_msg)
-
-                    # Render live trace
-                    html_steps = "".join(
-                        f'<div class="agent-step done">{s}</div>'
-                        for s in live_trace
-                    )
-                    trace_placeholder.markdown(
-                        f"<div>{html_steps}</div>", unsafe_allow_html=True
-                    )
-
-                st.session_state.ap_result = final_state
-                st.session_state.ap_trace = live_trace
-
-            except ImportError as ie:
-                st.error(
-                    f"Agent dependencies not installed: {ie}\n\n"
-                    "Run: `pip install langgraph langchain langchain-anthropic "
-                    "langchain-openai chromadb sentence-transformers anthropic`"
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                reply, provider, _diag = groq_or_local_reply(
+                    user_prompt,
+                    st.session_state["assistant_chat"],
+                    provider_mode=provider_mode,
+                    selected_model=selected_model,
                 )
-            except Exception as e:
-                st.session_state.ap_result = "ERROR" # To stop retriggering loop
-                st.error(f"Agent error: {e}")
-            finally:
-                st.session_state.ap_running = False
-                if st.session_state.ap_result != "ERROR":
-                    st.rerun()
+            st.markdown(reply)
+            st.caption(f"Provider: {provider}")
 
-    # ── Display results ──
-    if st.session_state.ap_result is not None and st.session_state.ap_result != "ERROR":
-        result = st.session_state.ap_result
+        st.session_state["assistant_chat"].append(
+            {"role": "assistant", "content": reply, "provider": provider}
+        )
 
-        # ── Agent trace ──
-        st.markdown("#### Agent Step Trace")
-        if st.session_state.ap_trace:
-            html_steps = "".join(
-                f'<div class="agent-step done">{s}</div>'
-                for s in st.session_state.ap_trace
-            )
-            st.markdown(f"<div>{html_steps}</div>", unsafe_allow_html=True)
+
+def page_debug_menu():
+    section_header("Debug Menu", "Complete diagnostics for pipeline, RAG, and API routing")
+
+    p0 = st.session_state.get("phase0_preflight")
+    p1 = st.session_state.get("phase1_validation")
+    p2 = st.session_state.get("phase2_validation")
+    p3 = st.session_state.get("phase3_validation")
+    p4 = st.session_state.get("phase4_validation")
+    p5 = st.session_state.get("phase5_validation")
+    p6 = st.session_state.get("phase6_validation")
+
+    summary = pd.DataFrame(
+        [
+            {"phase": "Phase 0", "status": "PASS" if getattr(p0, "passed", False) else "FAIL"},
+            {"phase": "Phase 1", "status": "PASS" if getattr(p1, "passed", False) else "FAIL"},
+            {"phase": "Phase 2", "status": "PASS" if getattr(p2, "passed", False) else "FAIL"},
+            {"phase": "Phase 3", "status": "PASS" if getattr(p3, "passed", False) else "FAIL"},
+            {"phase": "Phase 4", "status": "PASS" if getattr(p4, "passed", False) else "FAIL"},
+            {"phase": "Phase 5", "status": "PASS" if getattr(p5, "quality_gate_passed", False) else "FAIL"},
+            {"phase": "Phase 6", "status": "PASS" if getattr(p6, "handoff_ready", False) else "FAIL"},
+        ]
+    )
+
+    st.markdown("#### Pipeline Health")
+    st.dataframe(summary, hide_index=True, width="stretch")
+
+    st.markdown("#### Error and Warning Details")
+    for name, result in [
+        ("Phase 0", p0),
+        ("Phase 1", p1),
+        ("Phase 2", p2),
+        ("Phase 3", p3),
+        ("Phase 4", p4),
+        ("Phase 5", p5),
+        ("Phase 6", p6),
+    ]:
+        with st.expander(name, expanded=False):
+            errors = list(getattr(result, "errors", [])) if result is not None else []
+            warnings = list(getattr(result, "warnings", [])) if result is not None else []
+            if errors:
+                st.markdown("**Errors**")
+                for e in errors:
+                    st.caption(f"- {e}")
+            else:
+                st.caption("- No errors")
+
+            if warnings:
+                st.markdown("**Warnings**")
+                for w in warnings:
+                    st.caption(f"- {w}")
+            else:
+                st.caption("- No warnings")
+
+    st.markdown("#### API and Assistant Diagnostics")
+    diag = st.session_state.get("assistant_last_diag", {})
+    if diag:
+        st.json(diag)
+    else:
+        st.caption("No assistant request has been sent yet in this session.")
+
+    st.markdown("#### RAG Retrieval Test")
+    test_query = st.text_input("RAG Query", value="high-load zone scheduling and reliability margin")
+    if st.button("Run RAG Test", key="run_rag_test"):
+        rag_docs = retrieve_rag_context(test_query, st.session_state.get("agent_state", {}))
+        if rag_docs:
+            st.dataframe(pd.DataFrame(rag_docs), width="stretch", hide_index=True)
         else:
-            for msg in result.get("agent_trace", []):
-                st.markdown(
-                    f'<div class="agent-step done">{msg}</div>',
-                    unsafe_allow_html=True,
-                )
+            st.warning("No RAG documents returned for this query.")
 
-        st.divider()
+    st.markdown("#### Pipeline State Snapshot")
+    state = st.session_state.get("agent_state", {})
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Ranked Recommendations", len(state.get("ranked_recommendations", [])))
+    with c2:
+        st.metric("Confidence Notes", len(state.get("confidence_notes", [])))
 
-        # ── KPI strip ──
-        report = result.get("report", {})
-        stats = report.get("summary_statistics", {})
-        anomalies = result.get("anomalies", [])
-        predictions = result.get("predictions", {})
-        rag_sources = result.get("rag_sources", [])
-        recommendation = result.get("recommendation", "")
-
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Zones Analysed", len(predictions))
-        k2.metric("Avg Occupancy", f"{stats.get('avg_predicted_occupancy_pct', 0):.1f}%")
-        k3.metric("Max Occupancy", f"{stats.get('max_predicted_occupancy_pct', 0):.1f}%")
-        k4.metric("Zones at Risk", stats.get("zones_at_risk", 0))
-        k5.metric("RAG Sources", len(rag_sources))
-
-        gr = report.get("grounding_and_retrieval") or {}
-        if not gr.get("rag_retrieval_ok", True):
-            st.warning(
-                "**RAG retrieval failed or was skipped.** The agent continued with ML predictions "
-                "and rule-based heuristics only. Treat capital figures conservatively and "
-                "verify any uncited claims."
-            )
-        elif len(rag_sources) == 0 and gr.get("rag_retrieval_ok", True):
-            st.info(
-                "No knowledge-base documents matched this query closely. "
-                "The recommendation still uses zone-level ML outputs."
-            )
-
-        st.divider()
-
-        # ── Structured outputs (course rubric: demand summary, high-load IDs, scheduling) ──
-        with st.expander("Structured planning outputs (demand summary · high-load zones · scheduling)", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("**Charging demand summary**")
-                st.json(report.get("charging_demand_summary") or {})
-            with c2:
-                st.markdown("**High-load zone IDs (ranked)**")
-                st.json(report.get("high_load_locations") or [])
-            st.markdown("**Charger placement priorities**")
-            st.json(report.get("charger_placement_priorities") or [])
-            st.markdown("**Scheduling insights**")
-            st.json(report.get("scheduling_insights") or {})
-            st.markdown("**Grounding & retrieval**")
-            st.json(gr)
-
-        st.divider()
-
-        # ── Demand heatmap ──
-        st.markdown("#### Predicted Demand by Zone")
-        if predictions:
-            hm_data = pd.DataFrame([
-                {
-                    "Zone": f"Zone {z}",
-                    "Occupancy (%)": v["occupancy"],
-                    "Volume (kWh)": v["volume"],
-                    "Surge (%)": round(
-                        (v["occupancy"] - v["occ_baseline"]) / max(v["occ_baseline"], 1) * 100, 1
-                    ),
-                    "At Risk": z in {a["zone_id"] for a in anomalies},
-                }
-                for z, v in predictions.items()
-            ]).sort_values("Occupancy (%)", ascending=False)
-
-            hm_cols = st.columns(2)
-            with hm_cols[0]:
-                fig_occ = go.Figure(go.Bar(
-                    x=hm_data["Zone"],
-                    y=hm_data["Occupancy (%)"],
-                    marker=dict(
-                        color=hm_data["Occupancy (%)"],
-                        colorscale=[[0, "#1a1040"], [0.5, "#6C63FF"], [1, "#FF6B6B"]],
-                        line=dict(width=0),
-                    ),
-                    text=[f"{v:.0f}%" for v in hm_data["Occupancy (%)"]],
-                    textposition="outside",
-                ))
-                styled_fig(fig_occ, "Predicted Occupancy by Zone (%)", height=340)
-                fig_occ.update_xaxes(tickangle=-45)
-                st.plotly_chart(fig_occ, key="ap_occ_bar", width="stretch")
-
-            with hm_cols[1]:
-                fig_vol = go.Figure(go.Bar(
-                    x=hm_data["Zone"],
-                    y=hm_data["Volume (kWh)"],
-                    marker=dict(
-                        color=hm_data["Volume (kWh)"],
-                        colorscale=[[0, "#1a1040"], [0.5, "#00C9A7"], [1, "#FFD93D"]],
-                        line=dict(width=0),
-                    ),
-                    text=[f"{v:.0f}" for v in hm_data["Volume (kWh)"]],
-                    textposition="outside",
-                ))
-                styled_fig(fig_vol, "Predicted Volume by Zone (kWh)", height=340)
-                fig_vol.update_xaxes(tickangle=-45)
-                st.plotly_chart(fig_vol, key="ap_vol_bar", width="stretch")
-
-            # Surge scatter
-            st.markdown("##### Demand Surge vs Baseline")
-            fig_surge = go.Figure()
-            colors = ["#FF6B6B" if r else "#6C63FF" for r in hm_data["At Risk"]]
-            fig_surge.add_trace(go.Bar(
-                x=hm_data["Zone"],
-                y=hm_data["Surge (%)"],
-                marker=dict(color=colors, line=dict(width=0)),
-                text=[f"{v:+.0f}%" for v in hm_data["Surge (%)"]],
-                textposition="outside",
-            ))
-            fig_surge.add_hline(
-                y=40,
-                line=dict(color="rgba(255,193,7,0.6)", dash="dash", width=1.5),
-                annotation_text="Review threshold (40%)",
-                annotation_position="right",
-            )
-            styled_fig(fig_surge, "Demand Surge vs Historical Baseline", height=300)
-            fig_surge.update_xaxes(tickangle=-45)
-            st.plotly_chart(fig_surge, key="ap_surge", width="stretch")
-
-        st.divider()
-
-        # ── Anomaly alerts ──
-        st.markdown("#### Anomaly Alerts")
-        if anomalies:
-            for a in sorted(anomalies, key=lambda x: x.get("occupancy", 0), reverse=True):
-                sev = a.get("severity", "medium")
-                badge_cls = f"badge-{sev}"
-                surge_str = f"+{a.get('occ_pct_change', 0):.1f}%"
-                st.markdown(
-                    f"""
-                    <div class="agent-step error" style="border-color:{'rgba(255,107,107,0.4)' if sev=='critical' else 'rgba(255,193,7,0.4)' if sev=='high' else 'rgba(108,99,255,0.35)'}">
-                        <div>
-                            <span class="anomaly-badge {badge_cls}">{sev.upper()}</span>
-                            <b>Zone {a['zone_id']}</b> — Occupancy: <b>{a['occupancy']:.1f}%</b>&nbsp;
-                            (surge {surge_str}) · Volume: {a['volume']:.1f} kWh<br>
-                            <span style="font-size:0.82rem;opacity:0.7;">{a['reason']}</span>
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+    with st.expander("Top Recommendations (State)", expanded=False):
+        recs = state.get("ranked_recommendations", [])[:10]
+        if recs:
+            st.dataframe(pd.DataFrame(recs), width="stretch", hide_index=True)
         else:
-            st.success("No anomalous zones detected at current thresholds.")
-
-        st.divider()
-
-        # ── RAG sources ──
-        with st.expander(f"RAG Knowledge Base Sources ({len(rag_sources)} documents retrieved)"):
-            rag_context = result.get("rag_context", [])
-            for i, (src, ctx) in enumerate(zip(rag_sources, rag_context)):
-                st.markdown(
-                    f"""
-                    <div class="glass-card" style="margin-bottom:0.6rem;">
-                        <div style="font-size:0.72rem;opacity:0.5;margin-bottom:0.3rem;">Source [{i+1}]: <code>{src}</code></div>
-                        <div style="font-size:0.85rem;line-height:1.6;opacity:0.85;">{ctx[:400]}{'…' if len(ctx)>400 else ''}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-        st.divider()
-
-        # ── Human review gate ──
-        needs_review = result.get("needs_human_review", False)
-        if needs_review and not st.session_state.ap_approved:
-            st.markdown(
-                """
-                <div class="review-gate">
-                    <div style="font-size:1.1rem;font-weight:800;color:#FFC107;margin-bottom:0.5rem;">
-                        Human Approval Required
-                    </div>
-                    <div style="font-size:0.9rem;opacity:0.85;">
-                        This recommendation triggered the human review gate because:<br>
-                        • Predicted demand surge exceeds 40% above baseline, OR<br>
-                        • Recommendation involves adding more than 10 charging piles in a single zone, OR<br>
-                        • 5+ critical anomalies detected.<br><br>
-                        Please review the recommendation below before approving.
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            ap_col1, ap_col2 = st.columns(2)
-            with ap_col1:
-                if st.button(
-                    "Approve and Finalise Report",
-                    type="primary",
-                    key="ap_approve_btn",
-                    width="stretch",
-                ):
-                    st.session_state.ap_approved = True
-                    # Rerun agent with approved=True
-                    st.session_state.ap_running = True
-                    st.session_state.ap_result = None
-                    st.rerun()
-            with ap_col2:
-                if st.button(
-                    "Reject Recommendation",
-                    type="secondary",
-                    key="ap_reject_btn",
-                    width="stretch",
-                ):
-                    st.session_state.ap_result = None
-                    st.session_state.ap_trace = []
-                    st.session_state.ap_approved = False
-                    st.warning("Recommendation rejected. Please refine your query and try again.")
-                    st.rerun()
-        elif needs_review and st.session_state.ap_approved:
-            st.success("Recommendation approved by human reviewer.")
-
-        # ── Final recommendation ──
-        st.markdown("#### Infrastructure Recommendation")
-        if recommendation:
-            st.markdown(recommendation)
-        else:
-            st.info("No recommendation generated yet.")
-
-        st.divider()
-
-        # ── Download buttons ──
-        st.markdown("#### Export Report")
-        dl1, dl2 = st.columns(2)
-        with dl1:
-            report_json = json.dumps(report, indent=2, default=str)
-            st.download_button(
-                label="Download JSON Report",
-                data=report_json,
-                file_name=f"synora_report_{report.get('report_id', 'export')}.json",
-                mime="application/json",
-                key="ap_dl_json",
-                width="stretch",
-            )
-        with dl2:
-            # Generate markdown report
-            md_lines = [
-                f"# Synora Infrastructure Planning Report",
-                f"",
-                f"**Report ID:** `{report.get('report_id', 'N/A')}`  ",
-                f"**Generated:** {report.get('generated_at', 'N/A')}  ",
-                f"**Query:** {report.get('query', 'N/A')}  ",
-                f"**Forecast Window:** {report.get('forecast_window', {}).get('start', 'N/A')} – {report.get('forecast_window', {}).get('end', 'N/A')}",
-                f"",
-                f"## Summary Statistics",
-                f"| Metric | Value |",
-                f"|--------|-------|",
-            ]
-            for k, v in stats.items():
-                md_lines.append(f"| {k.replace('_', ' ').title()} | {v} |")
-            cd = report.get("charging_demand_summary")
-            if cd:
-                md_lines += ["", "## Charging demand summary", "", f"```json\n{json.dumps(cd, indent=2)}\n```"]
-            hl = report.get("high_load_locations")
-            if hl:
-                md_lines += ["", "## High-load locations (ranked)", ""]
-                for row in hl:
-                    md_lines.append(
-                        f"- Zone **{row['zone_id']}** (rank {row['rank']}): "
-                        f"{row['predicted_occupancy_pct']:.1f}% occ, "
-                        f"{row['predicted_volume_kwh']:.1f} kWh"
-                    )
-            si = report.get("scheduling_insights")
-            if si:
-                md_lines += ["", "## Scheduling insights", "", f"```json\n{json.dumps(si, indent=2)}\n```"]
-            md_lines += [
-                f"",
-                f"## Anomalies Detected ({len(anomalies)} zones)",
-            ]
-            for a in anomalies:
-                md_lines.append(f"- **Zone {a['zone_id']}** [{a.get('severity','').upper()}]: {a['reason']}")
-            md_lines += [
-                f"",
-                f"## Recommendation",
-                f"",
-                recommendation,
-                f"",
-                f"## RAG Sources Used",
-            ]
-            for src in rag_sources:
-                md_lines.append(f"- `{src}`")
-
-            md_report = "\n".join(md_lines)
-            st.download_button(
-                label="Download Markdown Report",
-                data=md_report,
-                file_name=f"synora_report_{report.get('report_id', 'export')}.md",
-                mime="text/markdown",
-                key="ap_dl_md",
-                width="stretch",
-            )
-
-    elif not st.session_state.ap_running:
-        # ── Empty state ──
-        st.markdown("""
-        <div style="text-align:center; padding:4rem 2rem; opacity:0.45;">
-            <div style="font-size:1.2rem; font-weight:700; margin-bottom:0.5rem;">Agentic Planner Ready</div>
-            <div style="font-size:0.9rem;">
-                Enter a planning query above and click <b>Run Agent</b> to start.<br>
-                The agent will analyse zone demand, detect anomalies, retrieve knowledge,<br>
-                and generate an AI-powered infrastructure recommendation.
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            st.caption("No recommendations available.")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2003,11 +1573,12 @@ def page_agentic_planner():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 {
-    "Agentic Planner": page_agentic_planner,
     "Overview": page_overview,
     "Model Comparison": page_model_comparison,
     "Predictions Explorer": page_predictions,
     "Feature Importance": page_feature_importance,
     "Zone Analysis": page_zone_analysis,
+    "AI Assistant": page_ai_assistant,
+    "Debug Menu": page_debug_menu,
     "About": page_about,
 }[page]()
